@@ -1,0 +1,22 @@
+# Web server dependencies
+flask>=3.0.0
+flask-socketio>=5.3.6
+requests>=2.31.0
+
+# Core audio and ML dependencies
+pyaudio>=0.2.11
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# Transcription
+openai-whisper>=20231117
+
+# LLM client
+ollama>=0.1.7
+
+# Audio processing utilities
+numpy>=1.24.0
+soundfile>=0.12.1
+
+# Utility libraries
+python-dotenv>=1.0.0
