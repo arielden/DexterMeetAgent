@@ -345,8 +345,8 @@ class DexterMeetAgent:
     def _generate_llm_response(self, transcription):
         """Genera respuesta usando LLM"""
         try:
-            # Generar respuesta
-            response = self.llm_client.generate_response(transcription)
+            # Generar respuesta (con RAG si está habilitado)
+            response = self.llm_client.generate_response(transcription, use_rag=config.use_rag)
             if response:
                 timestamp = time.strftime('%H:%M:%S')
                 

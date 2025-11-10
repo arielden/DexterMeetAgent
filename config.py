@@ -29,16 +29,31 @@ class TranscriptionConfig:
     
 
 @dataclass
+class RAGConfig:
+    """Configuración del sistema RAG con ChromaDB"""
+    collection_name: str = "knowledge_base"
+    embedding_model: str = "all-MiniLM-L6-v2"  # Modelo de embeddings
+    chunk_size: int = 1000  # Tamaño de chunks en caracteres
+    chunk_overlap: int = 200  # Superposición entre chunks
+    persist_directory: str = "./chroma_db"  # Directorio para persistir la DB
+    top_k: int = 3  # Número de documentos relevantes a recuperar
+    
+
+@dataclass
 class LLMConfig:
     """Configuración del modelo de lenguaje Ollama"""
     base_url: str = "http://localhost:11434"
     model_name: str = "llama3.2:3b"  # o "mistral:7b"
-    timeout: float = 30.0
+    timeout: float = 45.0  # Timeout más generoso
+    max_tokens: int = 200  # Tokens para respuestas concisas pero informativas
+    temperature: float = 0.7
+    top_p: float = 0.9
     
-    # Template del prompt
+    # Template del prompt con contexto RAG
     prompt_template: str = (
-        "Eres un asistente de clase. Responde la siguiente pregunta de forma "
-        "concisa en máximo 2-3 oraciones:\n\n"
+        "Responde de forma directa y concisa usando el contexto proporcionado. "
+        "No uses saludos, solo proporciona la información solicitada.\n\n"
+        "Contexto relevante:\n{context}\n\n"
         "Pregunta: {transcription}\n\n"
         "Respuesta:"
     )
@@ -50,15 +65,19 @@ class SystemConfig:
     audio: AudioConfig
     transcription: TranscriptionConfig
     llm: LLMConfig
+    rag: RAGConfig
     
     # Configuraciones generales
     debug_mode: bool = False
     log_level: str = "INFO"
+    use_rag: bool = True  # Habilitar RAG por defecto
     
     def __init__(self):
         self.audio = AudioConfig()
         self.transcription = TranscriptionConfig()
         self.llm = LLMConfig()
+        self.rag = RAGConfig()
+        self.rag = RAGConfig()
 
 
 # Instancia global de configuración

@@ -1,6 +1,6 @@
 """
 Cliente para interactuar con Ollama LLM local
-Genera respuestas cortas basadas en transcripciones
+Genera respuestas cortas basadas en transcripciones con soporte RAG
 """
 import ollama
 import logging
@@ -9,6 +9,7 @@ from typing import Optional, Dict, Any
 from dataclasses import dataclass
 
 from config import config
+from rag_client import get_relevant_context
 
 
 logger = logging.getLogger(__name__)
@@ -130,7 +131,9 @@ class OllamaClient:
         self, 
         transcription: str,
         model_name: Optional[str] = None,
-        custom_prompt: Optional[str] = None
+        custom_prompt: Optional[str] = None,
+        use_rag: bool = False,
+        use_stop_tokens: bool = True
     ) -> Optional[LLMResponse]:
         """
         Genera respuesta basada en transcripción
@@ -139,6 +142,8 @@ class OllamaClient:
             transcription: Texto transcrito
             model_name: Modelo a usar (opcional)
             custom_prompt: Prompt personalizado (opcional)
+            use_rag: Si usar RAG para contexto adicional
+            use_stop_tokens: Si usar tokens de parada
             
         Returns:
             Respuesta del LLM o None si falla
@@ -155,24 +160,43 @@ class OllamaClient:
             if not self.pull_model(model_name):
                 return None
         
+        # Obtener contexto RAG si está habilitado
+        context = ""
+        if use_rag:
+            context = get_relevant_context(transcription)
+            if context:
+                logger.debug(f"Contexto RAG obtenido: {len(context)} caracteres")
+            else:
+                logger.debug("No se encontró contexto relevante para RAG")
+        
         # Preparar prompt
         if custom_prompt:
-            prompt = custom_prompt.format(transcription=transcription)
+            if use_rag and "{context}" in custom_prompt:
+                prompt = custom_prompt.format(transcription=transcription, context=context)
+            else:
+                prompt = custom_prompt.format(transcription=transcription)
         else:
-            prompt = config.llm.prompt_template.format(transcription=transcription)
+            if use_rag and context:
+                prompt = config.llm.prompt_template.format(transcription=transcription, context=context)
+            else:
+                # Fallback al prompt sin contexto si no hay contexto RAG
+                prompt = config.llm.prompt_template.replace("{context}\n\n", "").format(transcription=transcription)
         
         try:
             start_time = time.time()
+            
+            # Configurar stop tokens basado en el parámetro
+            stop_tokens = ["¿Tienes", "¿Hay", "¿Necesitas", "¿Te", "Si quieres"] if use_stop_tokens else []
             
             # Generar respuesta
             response = self.client.generate(
                 model=model_name,
                 prompt=prompt,
                 options={
-                    "temperature": 0.7,
-                    "top_p": 0.9,
-                    "max_tokens": 150,  # Limitar para respuestas cortas
-                    "stop": ["\n\n"]    # Parar en doble salto de línea
+                    "temperature": config.llm.temperature,
+                    "top_p": config.llm.top_p,
+                    "num_predict": config.llm.max_tokens,  # Ollama usa num_predict en lugar de max_tokens
+                    "stop": stop_tokens  # Usar stop tokens condicionalmente
                 }
             )
             
@@ -200,38 +224,73 @@ class OllamaClient:
     
     def generate_short_response(self, transcription: str) -> Optional[str]:
         """
-        Genera respuesta corta optimizada para el asistente de clase
+        Genera respuesta optimizada para el asistente académico
         
         Args:
             transcription: Texto transcrito
             
         Returns:
-            Texto de respuesta corta o None
+            Texto de respuesta o None
         """
-        # Prompt optimizado para respuestas cortas
+        # Prompt optimizado para respuestas directas y concisas
         short_prompt = (
-            "Responde en máximo 2 oraciones de forma concisa y útil:\n\n"
+            "Responde de forma directa y concisa en 2-4 oraciones. No uses saludos.\n\n"
             "Pregunta: {transcription}\n\n"
-            "Respuesta:"
+            "Respuesta directa:"
         )
         
         response = self.generate_response(
             transcription=transcription,
-            custom_prompt=short_prompt
+            custom_prompt=short_prompt,
+            use_rag=True  # Usar RAG para mejor contexto
         )
         
+        # Si la respuesta es muy corta, reintentar sin stop tokens
+        if response is None:
+            logger.debug("Reintentando sin stop tokens para respuesta más completa...")
+            response = self.generate_response(
+                transcription=transcription,
+                custom_prompt=short_prompt,
+                use_rag=True,
+                use_stop_tokens=False  # Sin stop tokens para permitir respuestas más largas
+            )
+        
         if response:
-            # Post-procesar para asegurar brevedad
-            text = response.text
+            # Limpiar respuestas innecesariamente largas o con frases introductorias
+            text = response.text.strip()
             
-            # Limitar a las primeras 2 oraciones
-            sentences = text.split('.')
-            if len(sentences) > 2:
-                text = '. '.join(sentences[:2]) + '.'
+            # Remover frases introductorias comunes
+            introductory_phrases = [
+                "¡Excelente pregunta!",
+                "¡Hola!",
+                "Me alegra poder ayudarte",
+                "¡Excelente pregunta, estudiante!",
+                "Es una gran pregunta",
+                "Claro, te puedo ayudar"
+            ]
             
-            # Limitar longitud máxima
-            if len(text) > 200:
-                text = text[:197] + "..."
+            for phrase in introductory_phrases:
+                if text.startswith(phrase):
+                    # Remover la frase y limpiar espacios
+                    text = text[len(phrase):].strip()
+                    # Si queda con un salto de línea al inicio, removerlo también
+                    text = text.lstrip('\n').strip()
+            
+            # Verificar longitud mínima - si es muy corta, regenerar sin stop tokens
+            if len(text.split()) < 10:
+                logger.debug("Respuesta muy corta, reintentando sin stop tokens...")
+                return None
+            
+            # Limitar a máximo 4 oraciones para mantener concisión sin ser excesivo
+            sentences = [s.strip() for s in text.split('.') if s.strip()]
+            if len(sentences) > 4:
+                text = '. '.join(sentences[:4]) + '.'
+            elif len(sentences) > 0:
+                text = '. '.join(sentences) + '.'
+            
+            # Asegurar que termine con puntuación
+            if text and not text[-1] in '.!?':
+                text += '.'
                 
             return text
             

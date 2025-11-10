@@ -44,10 +44,112 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4. Instalar dependencias del sistema
+### 5. Configurar RAG (Opcional pero recomendado)
+DexterMeetAgent incluye soporte para **RAG (Retrieval-Augmented Generation)** que permite alimentar al LLM con información específica de tu dominio.
+
+#### Indexar base de conocimientos
 ```bash
-# Ubuntu/Debian
-sudo apt update
+# Indexar un archivo de texto con información técnica
+python index_knowledge_base.py knowledge_base.txt
+
+# O indexar múltiples archivos
+python index_knowledge_base.py documento1.txt
+python index_knowledge_base.py documento2.md
+```
+
+#### Archivo de ejemplo
+Se incluye `knowledge_base.txt` con información técnica del sistema como ejemplo.
+
+## 🤖 Configuración de LLM
+
+### Ollama Setup
+1. **Instalar Ollama**:
+   ```bash
+   curl -fsSL https://ollama.ai/install.sh | sh
+   ```
+
+2. **Iniciar servidor**:
+   ```bash
+   ollama serve
+   ```
+
+3. **Descargar modelo** (recomendado: llama3.2:3b):
+   ```bash
+   ollama pull llama3.2:3b
+   ```
+
+### Modelos recomendados
+- **llama3.2:3b**: Equilibrio velocidad/calidad
+- **mistral:7b**: Mejor comprensión contextual  
+- **gemma:2b**: Respuestas muy cortas
+
+### Variables de entorno (.env)
+```bash
+OLLAMA_MODEL=llama3.2:3b
+OLLAMA_URL=http://localhost:11434
+DEBUG=false
+USE_RAG=true
+```
+
+## 🧠 Sistema RAG (Retrieval-Augmented Generation)
+
+DexterMeetAgent utiliza **RAG** para proporcionar respuestas más precisas y contextuales basadas en tu base de conocimientos específica.
+
+### ¿Cómo funciona RAG?
+1. **Indexación**: Tus documentos se dividen en fragmentos y se convierten en vectores
+2. **Búsqueda**: Para cada pregunta, se buscan los fragmentos más relevantes
+3. **Generación**: El LLM recibe el contexto relevante junto con la pregunta
+
+### Beneficios
+- ✅ Respuestas basadas en conocimiento específico de tu dominio
+- ✅ Reducción de alucinaciones del modelo
+- ✅ Fácil actualización de información
+- ✅ Privacidad (todo queda local)
+
+### Gestión de Base de Conocimientos
+
+#### Indexar documentos
+```bash
+# Archivo único
+python index_knowledge_base.py mi_documento.txt
+
+# Múltiples archivos
+python index_knowledge_base.py docs/tecnico.md
+python index_knowledge_base.py docs/manual.pdf
+```
+
+#### Formatos soportados
+- **Texto plano** (.txt)
+- **Markdown** (.md)
+- **PDF** (próximamente)
+
+#### Ver estadísticas
+```python
+from rag_client import rag_client
+stats = rag_client.get_collection_stats()
+print(stats)  # {'total_documents': 25, ...}
+```
+
+#### Limpiar base de conocimientos
+```python
+from rag_client import rag_client
+rag_client.clear_collection()
+```
+
+### Configuración RAG
+```python
+# En config.py
+@dataclass
+class RAGConfig:
+    collection_name: str = "knowledge_base"
+    embedding_model: str = "all-MiniLM-L6-v2"
+    chunk_size: int = 1000
+    chunk_overlap: int = 200
+    top_k: int = 3
+```
+
+## 🚀 Uso
+```
 sudo apt install portaudio19-dev python3-pyaudio pulseaudio-utils
 
 # Fedora

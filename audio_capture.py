@@ -46,6 +46,20 @@ class AudioCapture:
         self.audio_buffer = []
         self.buffer_lock = threading.Lock()
         
+        # Auto-configurar Jabra como prioridad al inicializar
+        self._auto_configure_jabra()
+        
+    def _auto_configure_jabra(self):
+        """Configura automáticamente Jabra como monitor preferido"""
+        try:
+            logger.info("🎧 Configurando Jabra EVOLVE como monitor prioritario...")
+            if self.configure_jabra_as_default_monitor():
+                logger.info("✅ Jabra EVOLVE configurado correctamente como monitor")
+            else:
+                logger.info("ℹ️ Jabra no disponible, usará monitor por defecto")
+        except Exception as e:
+            logger.debug(f"Nota: Error auto-configurando Jabra: {e}")
+        
     def list_audio_devices(self) -> List[AudioDevice]:
         """Lista todos los dispositivos de audio disponibles"""
         devices = []
@@ -117,9 +131,26 @@ class AudioCapture:
             if device.is_input:
                 logger.info(f"  {device.index}: {device.name} (canales: {device.channels})")
         
-        logger.info("🎧 Configuración: Capturando del Line In/Monitor del sistema")
+        logger.info("🎧 Configuración: Capturando del Monitor del sistema (prioridad Jabra)")
         
-        # ESTRATEGIA 1: Buscar específicamente monitor de audio analógico
+        # PRIORIDAD 1: Buscar específicamente monitor de Jabra EVOLVE 20 MS
+        for device in devices:
+            if (device.is_input and 
+                "jabra" in device.name.lower() and 
+                "evolve" in device.name.lower() and
+                "monitor" in device.name.lower()):
+                logger.info(f"🎯 PRIORIDAD: Usando Monitor Jabra EVOLVE: {device.name}")
+                return device
+        
+        # PRIORIDAD 2: Buscar cualquier dispositivo Jabra (por si no aparece como monitor)
+        for device in devices:
+            if (device.is_input and 
+                "jabra" in device.name.lower() and 
+                "evolve" in device.name.lower()):
+                logger.info(f"🎧 Usando dispositivo Jabra: {device.name}")
+                return device
+                
+        # ESTRATEGIA 3: Buscar específicamente monitor de audio analógico
         for device in devices:
             if (device.is_input and 
                 "monitor" in device.name.lower() and 
@@ -127,19 +158,19 @@ class AudioCapture:
                 logger.info(f"🎵 Usando Monitor Analógico: {device.name}")
                 return device
         
-        # ESTRATEGIA 2: Usar PipeWire que debe acceder al monitor
+        # ESTRATEGIA 4: Usar PipeWire que debe acceder al monitor
         for device in devices:
             if device.is_input and "pipewire" in device.name.lower():
                 logger.info(f"🎵 Usando PipeWire: {device.name}")
                 return device
         
-        # ESTRATEGIA 3: Usar dispositivo "default" (ya configurado como monitor)
+        # ESTRATEGIA 5: Usar dispositivo "default" (ya configurado como monitor)
         for device in devices:
             if device.is_input and "default" in device.name.lower():
                 logger.info(f"🔧 Usando Default (Monitor): {device.name}")
                 return device
         
-        # ESTRATEGIA 3: Buscar dispositivos de audio analógico (pueden ser Line In)
+        # ESTRATEGIA 6: Buscar dispositivos de audio analógico (pueden ser Line In)
         for device in devices:
             if (device.is_input and 
                 ("analog" in device.name.lower() or "alc892" in device.name.lower()) and
@@ -257,18 +288,71 @@ class AudioCapture:
         if self.pyaudio_instance:
             self.pyaudio_instance.terminate()
     
+    def find_jabra_monitor_source(self) -> Optional[str]:
+        """Encuentra el source monitor de Jabra EVOLVE usando pactl"""
+        try:
+            result = subprocess.run(['pactl', 'list', 'sources'], 
+                                  capture_output=True, text=True, check=True)
+            
+            lines = result.stdout.split('\n')
+            current_source = None
+            
+            for line in lines:
+                # Buscar líneas que contengan "Name:"
+                if line.strip().startswith('Name:'):
+                    current_source = line.split(':', 1)[1].strip()
+                
+                # Si encontramos un monitor de Jabra EVOLVE
+                if (current_source and 
+                    'jabra' in current_source.lower() and 
+                    'evolve' in current_source.lower() and 
+                    'monitor' in current_source.lower()):
+                    logger.info(f"🎯 Encontrado monitor Jabra: {current_source}")
+                    return current_source
+            
+            logger.warning("⚠️ No se encontró monitor de Jabra EVOLVE en pactl")
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ Error ejecutando pactl: {e}")
+            return None
+    
+    def configure_jabra_as_default_monitor(self) -> bool:
+        """Configura el monitor de Jabra como fuente por defecto"""
+        jabra_source = self.find_jabra_monitor_source()
+        
+        if not jabra_source:
+            logger.warning("⚠️ No se puede configurar Jabra: monitor no encontrado")
+            return False
+        
+        try:
+            # Configurar como fuente por defecto
+            subprocess.run(['pactl', 'set-default-source', jabra_source], 
+                          check=True, capture_output=True)
+            logger.info(f"✅ Jabra configurado como fuente por defecto: {jabra_source}")
+            return True
+            
+        except subprocess.CalledProcessError as e:
+            logger.error(f"❌ Error configurando Jabra como defecto: {e}")
+            return False
+    
     def start_monitor_capture_parec(self):
         """
         Inicia captura de monitor usando parec (PipeWire) como alternativa a PyAudio
-        Esto captura exactamente lo que sale por los parlantes
+        Prioriza el monitor de Jabra EVOLVE 20 MS para capturar audio de auriculares
         """
         if self.is_recording:
             logger.warning("Ya hay una captura activa")
             return False
             
         try:
-            # Usar monitor de audio analógico configurado previamente
-            monitor_source = "alsa_output.pci-0000_08_00.6.analog-stereo.monitor"
+            # PRIORIDAD 1: Intentar usar monitor de Jabra
+            monitor_source = self.find_jabra_monitor_source()
+            
+            # PRIORIDAD 2: Fallback a monitor de audio analógico
+            if not monitor_source:
+                logger.info("🔄 Jabra no encontrado, usando monitor analógico por defecto")
+                monitor_source = "alsa_output.pci-0000_08_00.6.analog-stereo.monitor"
             
             logger.info(f"🎵 MONITOR: Iniciando captura con parec desde {monitor_source}")
             
@@ -289,7 +373,7 @@ class AudioCapture:
             self.parec_thread.daemon = True
             self.parec_thread.start()
             
-            logger.info("✅ MONITOR: Captura parec iniciada - capturando audio de parlantes")
+            logger.info(f"✅ MONITOR: Captura parec iniciada desde {monitor_source}")
             return True
             
         except Exception as e:
@@ -298,26 +382,35 @@ class AudioCapture:
     
     def _parec_capture_loop(self):
         """Loop de captura para parec en hilo separado"""
+        logger.info("🎵 MONITOR: Iniciando loop de captura parec")
         try:
             buffer_size = 1024  # Chunks de 1024 bytes
             chunk_count = 0
+            total_bytes = 0
             
             while self.is_recording and self.parec_process and self.parec_process.poll() is None:
                 # Verificar que stdout esté disponible
                 if not self.parec_process.stdout:
+                    logger.error("❌ MONITOR: stdout no disponible")
                     break
                     
                 # Leer chunk de audio raw
                 chunk_bytes = self.parec_process.stdout.read(buffer_size)
                 
                 if not chunk_bytes:
+                    logger.debug("📭 MONITOR: No hay más datos")
                     break
+                
+                total_bytes += len(chunk_bytes)
                 
                 # Convertir bytes a numpy array (s16le -> float32 normalizado)
                 audio_chunk = np.frombuffer(chunk_bytes, dtype=np.int16).astype(np.float32) / 32768.0
                 
                 if len(audio_chunk) == 0:
                     continue
+                
+                # Log amplitud para debugging
+                max_amp = np.max(np.abs(audio_chunk)) if len(audio_chunk) > 0 else 0
                 
                 # Llamar al callback si existe
                 if hasattr(self, 'audio_callback') and self.audio_callback:
@@ -335,10 +428,11 @@ class AudioCapture:
                 
                 chunk_count += 1
                 
-                # Log cada 100 chunks para debugging
-                if chunk_count % 100 == 0:
-                    max_amp = np.max(np.abs(audio_chunk)) if len(audio_chunk) > 0 else 0
-                    logger.debug(f"🎵 MONITOR chunk {chunk_count}, amplitud: {max_amp:.6f}")
+                # Log cada 50 chunks para debugging
+                if chunk_count % 50 == 0:
+                    logger.info(f"🎵 MONITOR chunk {chunk_count}, amplitud: {max_amp:.6f}, bytes: {len(chunk_bytes)}")
+                    
+            logger.info(f"🔴 MONITOR: Loop terminado. Chunks: {chunk_count}, Total bytes: {total_bytes}")
                     
         except Exception as e:
             logger.error(f"❌ MONITOR: Error en loop parec: {e}")
